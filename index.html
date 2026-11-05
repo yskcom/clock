@@ -209,6 +209,62 @@
   .dark .fill { opacity: 0.45; }
   .dark #nowIcon, .dark .icon { opacity: 0.45; }
   .dark #place svg { opacity: 0.55; }
+
+  /* Location dialog */
+  #dialog {
+    display: none;
+    position: absolute; top: 0; right: 0; bottom: 0; left: 0;
+    background: rgba(0, 0, 0, 0.6);
+  }
+  #dialog.open { display: block; }
+  #dialogBox {
+    position: relative;
+    width: 76vmin; margin: 4vmin auto 0; padding: 3vmin;
+    box-sizing: border-box;
+    background: #1c232e; color: #fff;
+    border-radius: 2.2vmin;
+    font-size: 3vmin;
+  }
+  #dialogTitle { font-size: 3.6vmin; font-weight: 500; margin-bottom: 2vmin; }
+  #searchForm { display: -webkit-flex; display: flex; margin: 0; }
+  #searchInput {
+    -webkit-flex: 1 1 auto; flex: 1 1 auto; min-width: 0;
+    margin: 0 1.5vmin 0 0; padding: 1.6vmin 2vmin;
+    border: 0; border-radius: 1.2vmin;
+    background: #fff; color: #000;
+    font: inherit; font-size: 3.2vmin;
+    -webkit-appearance: none;
+    /* Without this, the page-wide "no selecting" rule stops typing on iOS. */
+    -webkit-user-select: text; user-select: text;
+  }
+  .dialogBtn {
+    margin: 0; padding: 1.6vmin 2.6vmin;
+    border: 0; border-radius: 1.2vmin;
+    background: rgba(255, 255, 255, 0.16); color: inherit;
+    font: inherit; cursor: pointer; -webkit-appearance: none;
+  }
+  #searchBtn { -webkit-flex: 0 0 auto; flex: 0 0 auto; background: #2f7fd1; color: #fff; }
+  #searchMsg { margin-top: 2vmin; color: rgba(255, 255, 255, 0.75); }
+  #searchMsg:empty { display: none; }
+  .result {
+    display: block; width: 100%; margin: 1vmin 0 0; padding: 1.3vmin 2vmin;
+    border: 0; border-radius: 1.2vmin; box-sizing: border-box;
+    background: rgba(255, 255, 255, 0.08); color: inherit;
+    font: inherit; text-align: left; cursor: pointer; -webkit-appearance: none;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .result small { display: block; font-size: 2.3vmin; color: rgba(255, 255, 255, 0.65); overflow: hidden; text-overflow: ellipsis; }
+  #dialogActions {
+    display: -webkit-flex; display: flex;
+    -webkit-justify-content: space-between; justify-content: space-between;
+    margin-top: 2.4vmin;
+  }
+  #credit { margin-top: 1.6vmin; font-size: 2vmin; color: rgba(255, 255, 255, 0.5); text-align: right; }
+  .dark #dialog { background: rgba(0, 0, 0, 0.8); }
+  .dark #dialogBox { background: #12100d; color: #8d8577; }
+  .dark #searchInput { background: #2a2620; color: #a59c8c; }
+  .dark #searchBtn { background: #3a342b; color: #a59c8c; }
+  .dark #searchMsg, .dark .result small, .dark #credit { color: #736c61; }
 </style>
 </head>
 <body>
@@ -241,6 +297,22 @@
   </div>
   <div id="status"></div>
 </div>
+<div id="dialog">
+  <div id="dialogBox">
+    <div id="dialogTitle">Change location</div>
+    <form id="searchForm" action="#">
+      <input id="searchInput" type="text" placeholder="City, district or postcode" autocomplete="off" autocorrect="off" autocapitalize="words" spellcheck="false">
+      <button id="searchBtn" class="dialogBtn" type="submit">Search</button>
+    </form>
+    <div id="searchMsg"></div>
+    <div id="results"></div>
+    <div id="dialogActions">
+      <button id="useDevice" class="dialogBtn" type="button">Use my current location</button>
+      <button id="closeDialog" class="dialogBtn" type="button">Cancel</button>
+    </div>
+    <div id="credit">Search by OpenStreetMap</div>
+  </div>
+</div>
 
 <script>
 /* Plain ES5 on purpose: this has to run on Safari 12 (iOS 12.5.8). */
@@ -269,6 +341,8 @@
   var STALE_AFTER = HOUR;
   var LOCATE_RETRY_AFTER = 5 * MINUTE;
   var LOCATE_TIMEOUT = 30 * 1000;
+  var DEVICE_RECHECK = HOUR;
+  var DIALOG_IDLE = 2 * MINUTE;
   var WEATHER_KEY = 'weather-v2';
   var PLACE_KEY = 'place-v2';
 
@@ -276,6 +350,7 @@
   var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
     'August', 'September', 'October', 'November', 'December'];
 
+  var SEARCH_URL = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&accept-language=en&q=';
   var GEOCODE_URL = 'https://api.bigdatacloud.net/data/reverse-geocode-client?localityLanguage=en';
   var WEATHER_URL = 'https://api.open-meteo.com/v1/forecast' +
     '?current=temperature_2m,weather_code,is_day' +
@@ -283,7 +358,16 @@
     '&timezone=auto&forecast_days=5' +
     (CONFIG.fahrenheit ? '&temperature_unit=fahrenheit' : '');
 
-  var place = null;        /* { lat, lon, name } */
+  /* source: 'device' (the iPad's own position), 'manual' (chosen by hand) or
+     'ip' (estimated from the internet connection). */
+  var place = null;        /* { lat, lon, name, source, denied } */
+  var locateToken = 0;     /* only the newest location request may change the place */
+  var nextDeviceCheck = 0;
+  var deviceCheckPending = false;
+  var locationDenied = false;
+  var dialogOpen = false;
+  var dialogTouched = 0;
+  var searchToken = 0;
   var weather = null;      /* { data, fetchedAt, lat, lon } */
   var nextFetch = 0;
   var fetching = false;
@@ -407,13 +491,25 @@
     }
   }
 
+  /* A place chosen by hand can be in another time zone, where it may already
+     be tomorrow or still be yesterday. */
+  function placeDayKey(data, now) {
+    if (typeof data.utc_offset_seconds !== 'number') { return dayKey(now); }
+    return new Date(now.getTime() + data.utc_offset_seconds * 1000).toISOString().slice(0, 10);
+  }
+
+  function dayNameOf(key) {
+    var p = key.split('-');
+    return DAYS[new Date(Date.UTC(+p[0], +p[1] - 1, +p[2])).getUTCDay()].slice(0, 3);
+  }
+
   function renderWeather() {
     clearWeather();
     if (!weather) { return; }
     var data = weather.data;
     var daily = data.daily;
     var now = new Date();
-    var today = daily.time.indexOf(dayKey(now));
+    var today = daily.time.indexOf(placeDayKey(data, now));
     var night = data.current.is_day === 0;
     var w = describe(data.current.weather_code, night);
 
@@ -431,6 +527,7 @@
       if (i >= daily.time.length) { continue; }
       var lo = daily.temperature_2m_min[i];
       var hi = daily.temperature_2m_max[i];
+      setText('d' + n + 'n', dayNameOf(daily.time[i]));
       setIcon('d' + n + 'i', describe(daily.weather_code[i], false).icon);
       setText('d' + n + 'l', deg(lo));
       setText('d' + n + 'h', deg(hi));
@@ -458,12 +555,19 @@
 
   function renderPlace(message) {
     var label = message || (place ? place.name : '');
+    /* The small mark means this is only the internet connection's estimate. */
+    if (!message && place && isEstimate(place)) { label = '\u2248 ' + label; }
     $('place').innerHTML = PIN;
     $('place').appendChild(document.createTextNode(label));
   }
 
   function placeName(geo) {
     return geo.city || geo.locality || geo.principalSubdivision || 'Current location';
+  }
+
+  /* Places saved by older versions have no source, so they could be an estimate. */
+  function isEstimate(p) {
+    return p.source !== 'device' && p.source !== 'manual';
   }
 
   function samePlace(a, b) {
@@ -485,22 +589,23 @@
     locating = false;
     if (failed) {
       nextLocate = Date.now() + LOCATE_RETRY_AFTER;
-      renderPlace(place ? '' : 'Location unavailable. Tap to retry');
+      renderPlace(place ? '' : 'Location unavailable. Tap to choose');
     }
   }
 
   /* With coordinates: turns them into a place name.
      Without: the service estimates the location from the internet connection. */
-  function lookUpPlace(lat, lon) {
+  function lookUpPlace(lat, lon, token) {
     var hasCoords = typeof lat === 'number';
     var url = GEOCODE_URL + (hasCoords ? '&latitude=' + lat + '&longitude=' + lon : '');
     var done = false;
     function fail() {
       if (done) { return; }
       done = true;
+      if (token !== locateToken) { return; }
       if (hasCoords) {
         /* We know where we are, just not what it's called. Weather still works. */
-        setPlace({ lat: lat, lon: lon, name: 'Current location' });
+        setPlace({ lat: lat, lon: lon, name: 'Current location', source: 'device' });
         finishLocating(false);
       } else {
         finishLocating(true);
@@ -511,6 +616,7 @@
     xhr.timeout = 20000;
     xhr.onload = function () {
       if (done) { return; }
+      if (token !== locateToken) { done = true; return; }
       var geo = null;
       try { geo = xhr.status === 200 ? JSON.parse(xhr.responseText) : null; } catch (e) { geo = null; }
       if (!geo) { fail(); return; }
@@ -518,7 +624,12 @@
       var outLon = hasCoords ? lon : round2(geo.longitude);
       if (typeof outLat !== 'number' || isNaN(outLat) || isNaN(outLon)) { fail(); return; }
       done = true;
-      setPlace({ lat: outLat, lon: outLon, name: placeName(geo) });
+      var next = { lat: outLat, lon: outLon, name: placeName(geo), source: hasCoords ? 'device' : 'ip' };
+      if (!hasCoords) {
+        next.denied = locationDenied;
+        nextDeviceCheck = Date.now() + DEVICE_RECHECK;
+      }
+      setPlace(next);
       finishLocating(false);
     };
     xhr.onerror = xhr.ontimeout = xhr.onabort = fail;
@@ -527,31 +638,155 @@
 
   function round2(value) { return Math.round(value * 100) / 100; }
 
+  var GEO_OPTIONS = { enableHighAccuracy: true, timeout: 20000, maximumAge: 5 * MINUTE };
+
   /* Asks the iPad for its position, falling back to the internet connection's
-     approximate location if that's refused, fails, or nobody answers the prompt. */
+     approximate location if that's refused, fails, or nobody answers the prompt.
+     A real position is never replaced by an estimate. */
   function detectPlace() {
     if (locating) { return; }
     locating = true;
+    var token = ++locateToken;
     renderPlace('Finding your location…');
 
     var fellBack = false;
     function fallBack() {
       if (fellBack) { return; }
       fellBack = true;
-      lookUpPlace();
+      if (token !== locateToken) { return; }
+      if (place && place.source === 'device') {
+        finishLocating(false);
+        renderPlace();
+        return;
+      }
+      lookUpPlace(undefined, undefined, token);
     }
     if (!navigator.geolocation) { fallBack(); return; }
 
     var timer = setTimeout(fallBack, LOCATE_TIMEOUT);
+    deviceCheckPending = true; /* so a later check doesn't stack a second prompt */
     navigator.geolocation.getCurrentPosition(function (pos) {
       /* A late answer still wins, because it's more accurate than the estimate. */
+      deviceCheckPending = false;
       clearTimeout(timer);
       fellBack = true;
-      lookUpPlace(round2(pos.coords.latitude), round2(pos.coords.longitude));
-    }, function () {
+      if (token !== locateToken) { return; }
+      token = ++locateToken; /* an estimate still on its way must not overwrite this */
+      lookUpPlace(round2(pos.coords.latitude), round2(pos.coords.longitude), token);
+    }, function (err) {
+      deviceCheckPending = false;
       clearTimeout(timer);
+      if (err && err.code === 1) { locationDenied = true; }
       fallBack();
-    }, { enableHighAccuracy: false, timeout: 20000, maximumAge: HOUR });
+    }, GEO_OPTIONS);
+  }
+
+  /* While the place is only an estimate, keep trying quietly for the real one.
+     Stops if location access was refused, until someone asks for it again. */
+  function checkDeviceLocation(now) {
+    nextDeviceCheck = now + DEVICE_RECHECK;
+    if (deviceCheckPending || !navigator.geolocation) { return; }
+    deviceCheckPending = true;
+    var token = ++locateToken;
+    navigator.geolocation.getCurrentPosition(function (pos) {
+      deviceCheckPending = false;
+      if (token === locateToken) {
+        lookUpPlace(round2(pos.coords.latitude), round2(pos.coords.longitude), token);
+      }
+    }, function (err) {
+      deviceCheckPending = false;
+      if (err && err.code === 1 && token === locateToken && place) {
+        place.denied = true;
+        save(PLACE_KEY, place);
+      }
+    }, GEO_OPTIONS);
+  }
+
+  /* ---------- Choosing a location ---------- */
+
+  function openDialog() {
+    dialogOpen = true;
+    dialogTouched = Date.now();
+    searchToken++;
+    $('dialog').className = 'open';
+    $('searchInput').value = '';
+    setText('searchMsg', '');
+    $('results').innerHTML = '';
+    $('searchInput').focus();
+  }
+
+  function closeDialog() {
+    dialogOpen = false;
+    searchToken++;
+    $('searchInput').blur();
+    $('dialog').className = '';
+    window.scrollTo(0, 0); /* iOS can leave the page shifted after the keyboard closes */
+  }
+
+  function chooseResult(result) {
+    locateToken++; /* cancels any location request still under way */
+    locating = false;
+    closeDialog();
+    setPlace({ lat: result.lat, lon: result.lon, name: result.name, source: 'manual' });
+  }
+
+  function addResult(result) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'result';
+    btn.appendChild(document.createTextNode(result.name));
+    var small = document.createElement('small');
+    small.appendChild(document.createTextNode(result.detail || ' '));
+    btn.appendChild(small);
+    btn.addEventListener('click', function () { chooseResult(result); });
+    $('results').appendChild(btn);
+  }
+
+  function parseResult(item) {
+    var lat = round2(parseFloat(item.lat));
+    var lon = round2(parseFloat(item.lon));
+    var parts = String(item.display_name || '').split(', ');
+    var name = item.name || parts[0];
+    if (!name || isNaN(lat) || isNaN(lon)) { return null; }
+    if (parts[0] === name) { parts.shift(); }
+    return { lat: lat, lon: lon, name: name, detail: parts.join(', ') };
+  }
+
+  function search() {
+    var query = $('searchInput').value.replace(/^\s+|\s+$/g, '');
+    dialogTouched = Date.now();
+    if (!query) { return; }
+    var token = ++searchToken;
+    $('searchInput').blur(); /* lowers the keyboard so the results can be seen */
+    window.scrollTo(0, 0);
+    $('results').innerHTML = '';
+    setText('searchMsg', 'Searching…');
+
+    var done = false;
+    function fail() {
+      if (done) { return; }
+      done = true;
+      if (token === searchToken) { setText('searchMsg', 'Can’t search right now. Check the connection and try again.'); }
+    }
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', SEARCH_URL + encodeURIComponent(query));
+    xhr.timeout = 20000;
+    xhr.onload = function () {
+      if (done) { return; }
+      var list = null;
+      try { list = xhr.status === 200 ? JSON.parse(xhr.responseText) : null; } catch (e) { list = null; }
+      if (!list || typeof list.length !== 'number') { fail(); return; }
+      done = true;
+      if (token !== searchToken) { return; }
+      var found = 0;
+      for (var i = 0; i < list.length; i++) {
+        var result = parseResult(list[i]);
+        if (result) { addResult(result); found++; }
+      }
+      setText('searchMsg', found ? '' : 'No places found. Try a different spelling or a nearby city.');
+    };
+    xhr.onerror = xhr.ontimeout = xhr.onabort = fail;
+    xhr.send();
   }
 
   /* ---------- Saved data ---------- */
@@ -568,6 +803,7 @@
     var savedPlace = load(PLACE_KEY);
     if (savedPlace && typeof savedPlace.lat === 'number' && typeof savedPlace.lon === 'number') {
       place = savedPlace;
+      locationDenied = !!savedPlace.denied;
     }
     var saved = load(WEATHER_KEY);
     if (place && saved && samePlace(saved, place) && saved.data && saved.data.daily && saved.data.current) {
@@ -621,7 +857,7 @@
      the clock for an error screen with nothing to bring it back. */
   function maybeReload(now) {
     var d = new Date(now);
-    if (d.getHours() !== 4 || now - loadedAt < 20 * HOUR || now < nextReloadCheck) { return; }
+    if (dialogOpen || d.getHours() !== 4 || now - loadedAt < 20 * HOUR || now < nextReloadCheck) { return; }
     nextReloadCheck = now + 5 * MINUTE;
     var xhr = new XMLHttpRequest();
     xhr.open('GET', location.pathname + '?ping=' + now);
@@ -665,6 +901,8 @@
     }
 
     if (!place && !locating && now >= nextLocate) { detectPlace(); }
+    if (place && isEstimate(place) && !place.denied && !locating && now >= nextDeviceCheck) { checkDeviceLocation(now); }
+    if (dialogOpen && now - dialogTouched > DIALOG_IDLE) { closeDialog(); }
     if (place && !fetching && now >= nextFetch) { fetchWeather(); }
     renderStatus(now);
     maybeReload(now);
@@ -673,9 +911,23 @@
   /* Stop the page rubber-banding when the screen is touched. */
   document.addEventListener('touchmove', function (e) { e.preventDefault(); }, { passive: false });
 
-  /* The location is remembered, so an unattended reload never brings up a
-     permission prompt. Tapping the place name checks it again. */
-  $('place').addEventListener('click', detectPlace);
+  /* A real or chosen location is remembered, so an unattended reload doesn't
+     bring up a permission prompt. Tapping the place name lets you change it. */
+  $('place').addEventListener('click', openDialog);
+  $('closeDialog').addEventListener('click', closeDialog);
+  $('useDevice').addEventListener('click', function () {
+    locationDenied = false;
+    locateToken++;
+    locating = false;
+    closeDialog();
+    detectPlace();
+  });
+  $('searchForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    search();
+  });
+  $('dialogBox').addEventListener('click', function () { dialogTouched = Date.now(); });
+  $('searchInput').addEventListener('input', function () { dialogTouched = Date.now(); });
 
   loadSaved();
   renderPlace();
