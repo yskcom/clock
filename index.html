@@ -153,6 +153,48 @@
     text-align: center; font-size: 2.2vmin; color: #ffc46b;
   }
 
+  /* Portrait: time and date on top, then current weather and the 3-day outlook
+     each across the full width. Landscape uses the styles above unchanged. */
+  @media (orientation: portrait) {
+    #app { padding: 3vmin 3vmin 3.5vmin; }
+    #time { font-size: 38vw; }
+    #info {
+      -webkit-flex-direction: column; flex-direction: column;
+      font-size: 5.6vmin; margin-top: 2vmin;
+    }
+    #dot { display: none; }
+    #place { max-width: 100%; padding: 0.6vmin 0; }
+    #place svg { width: 4.6vmin; height: 4.6vmin; }
+
+    #bottom {
+      -webkit-flex-direction: column; flex-direction: column;
+      margin-top: 3vmin;
+    }
+    #now {
+      -webkit-flex: 0 0 auto; flex: 0 0 auto;
+      margin-right: 0; margin-bottom: 2.5vmin;
+      padding: 5vmin 4vmin;
+    }
+    #nowIcon { width: 17vmin; height: 17vmin; margin-right: 3vmin; }
+    #nowTemp { font-size: 19vmin; margin-right: 4vmin; }
+    #nowDesc { font-size: 3.6vmin; margin-bottom: 1.6vmin; }
+    .hilo { font-size: 6vmin; }
+    .hilo .lbl { font-size: 3.8vmin; width: 9.5vmin; }
+
+    #outlook {
+      -webkit-flex: 0 0 auto; flex: 0 0 auto;
+      padding: 3.5vmin 5vmin;
+    }
+    .day { font-size: 4.6vmin; padding: 1.6vmin 0; }
+    .day .name { width: 11vmin; }
+    .day .icon { width: 7.5vmin; height: 7.5vmin; margin-right: 3vmin; }
+    .day .low, .day .high { width: 10vmin; }
+    .day .low { margin-right: 2.5vmin; }
+    .day .high { margin-left: 2.5vmin; }
+    .bar { height: 1.8vmin; border-radius: 0.9vmin; }
+    .fill { border-radius: 0.9vmin; }
+  }
+
   /* Dark mode for night hours: black background and dim, warm text, so the
      screen gives off as little light as possible. */
   html.dark, html.dark body { background: #000; color: #736c61; }
