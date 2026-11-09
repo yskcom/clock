@@ -583,6 +583,7 @@
     place = next;
     save(PLACE_KEY, place);
     renderPlace();
+    renderClock(new Date());
   }
 
   function finishLocating(failed) {
@@ -838,6 +839,7 @@
               weather = { data: data, fetchedAt: Date.now(), lat: forPlace.lat, lon: forPlace.lon };
               save(WEATHER_KEY, weather);
               renderWeather();
+              renderClock(new Date());
             } else {
               nextFetch = 0; /* moved while this was loading: fetch again */
             }
@@ -868,6 +870,38 @@
     xhr.send();
   }
 
+  /* A place chosen by hand shows its own local time. The returned date's normal
+     getters read as that place's clock. Null until its time zone is known, which
+     arrives with its weather. Automatic locations simply use the iPad's clock. */
+  function clockDate(nowDate) {
+    if (!place || place.source !== 'manual') { return nowDate; }
+    if (!weather || typeof weather.data.utc_offset_seconds !== 'number') { return null; }
+    return new Date(nowDate.getTime() +
+      (weather.data.utc_offset_seconds + nowDate.getTimezoneOffset() * 60) * 1000);
+  }
+
+  function renderClock(nowDate) {
+    var shown = clockDate(nowDate);
+    var time = shown ? formatTime(shown) : '--:--';
+    if (time !== lastTime) {
+      lastTime = time;
+      setText('time', time);
+    }
+    if (!shown) {
+      lastDay = '';
+      setText('date', '\u00a0');
+      return;
+    }
+    var day = dayKey(shown);
+    if (day !== lastDay) {
+      var firstRun = lastDay === '';
+      lastDay = day;
+      setText('date', DAYS[shown.getDay()] + ', ' + MONTHS[shown.getMonth()] + ' ' + shown.getDate());
+      renderWeather();
+      if (!firstRun) { nextFetch = 0; } /* new day: get today's low and high straight away */
+    }
+  }
+
   function isDarkTime(hour) {
     if (forcedMode) { return forcedMode === 'dark'; }
     return hour >= CONFIG.darkFromHour || hour < CONFIG.darkUntilHour;
@@ -885,20 +919,7 @@
       document.documentElement.className = dark ? 'dark' : '';
     }
 
-    var time = formatTime(nowDate);
-    if (time !== lastTime) {
-      lastTime = time;
-      setText('time', time);
-    }
-
-    var day = dayKey(nowDate);
-    if (day !== lastDay) {
-      var firstRun = lastDay === '';
-      lastDay = day;
-      setText('date', DAYS[nowDate.getDay()] + ', ' + MONTHS[nowDate.getMonth()] + ' ' + nowDate.getDate());
-      renderWeather();
-      if (!firstRun) { nextFetch = 0; } /* new day: get today's low and high straight away */
-    }
+    renderClock(nowDate);
 
     if (!place && !locating && now >= nextLocate) { detectPlace(); }
     if (place && isEstimate(place) && !place.denied && !locating && now >= nextDeviceCheck) { checkDeviceLocation(now); }
