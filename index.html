@@ -324,6 +324,7 @@
     fahrenheit: false,    /* false = Celsius */
     use24Hour: false,     /* true = 24-hour clock */
     darkFromHour: 21,     /* dark mode starts at 9 p.m. */
+    reloadHour: 23,       /* picks up the latest version daily at 11 p.m. iPad time */
     darkUntilHour: 6,     /* dark mode ends at 6 a.m. */
     scaleLow: 0,          /* left end of the temperature bars */
     scaleHigh: 30         /* right end of the temperature bars */
@@ -854,12 +855,14 @@
     xhr.send();
   }
 
-  /* Reload around 4 a.m. to clear any long-running browser buildup, but only
-     after checking the page is reachable: reloading while offline would swap
+  /* Reload once a day to pick up the latest version and clear any long-running
+     browser buildup. Always uses the iPad's own time. The gap since loading stops
+     it reloading again within the same hour. Only reloads after checking the page
+     is reachable: reloading while offline would swap
      the clock for an error screen with nothing to bring it back. */
   function maybeReload(now) {
     var d = new Date(now);
-    if (dialogOpen || d.getHours() !== 4 || now - loadedAt < 20 * HOUR || now < nextReloadCheck) { return; }
+    if (dialogOpen || d.getHours() !== CONFIG.reloadHour || now - loadedAt < 2 * HOUR || now < nextReloadCheck) { return; }
     nextReloadCheck = now + 5 * MINUTE;
     var xhr = new XMLHttpRequest();
     xhr.open('GET', location.pathname + '?ping=' + now);
