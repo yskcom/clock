@@ -211,13 +211,13 @@
   .dark #place svg { opacity: 0.55; }
 
   /* Location dialog */
-  #dialog {
+  #dialog, #unitDialog {
     display: none;
     position: absolute; top: 0; right: 0; bottom: 0; left: 0;
     background: rgba(0, 0, 0, 0.6);
   }
-  #dialog.open { display: block; }
-  #dialogBox {
+  #dialog.open, #unitDialog.open { display: block; }
+  #dialogBox, #unitBox {
     position: relative;
     width: 76vmin; margin: 4vmin auto 0; padding: 3vmin;
     box-sizing: border-box;
@@ -225,7 +225,8 @@
     border-radius: 2.2vmin;
     font-size: 3vmin;
   }
-  #dialogTitle { font-size: 3.6vmin; font-weight: 500; margin-bottom: 2vmin; }
+  #unitBox { width: 56vmin; margin-top: 12vmin; }
+  #dialogTitle, .dialogTitle { font-size: 3.6vmin; font-weight: 500; margin-bottom: 2vmin; }
   #searchForm { display: -webkit-flex; display: flex; margin: 0; }
   #searchInput {
     -webkit-flex: 1 1 auto; flex: 1 1 auto; min-width: 0;
@@ -260,8 +261,15 @@
     margin-top: 2.4vmin;
   }
   #credit { margin-top: 1.6vmin; font-size: 2vmin; color: rgba(255, 255, 255, 0.5); text-align: right; }
-  .dark #dialog { background: rgba(0, 0, 0, 0.8); }
-  .dark #dialogBox { background: #12100d; color: #8d8577; }
+  .unitOpt { padding: 2vmin 2.4vmin; font-size: 3.2vmin; }
+  .unitOpt .check { float: right; visibility: hidden; }
+  .unitOpt.chosen { background: rgba(47, 127, 209, 0.45); }
+  .unitOpt.chosen .check { visibility: visible; }
+  .unitActions { text-align: right; margin-top: 2.4vmin; }
+  #now { cursor: pointer; } /* iOS only sends taps to elements that look clickable */
+  .dark .unitOpt.chosen { background: #3a342b; }
+  .dark #dialog, .dark #unitDialog { background: rgba(0, 0, 0, 0.8); }
+  .dark #dialogBox, .dark #unitBox { background: #12100d; color: #8d8577; }
   .dark #searchInput { background: #2a2620; color: #a59c8c; }
   .dark #searchBtn { background: #3a342b; color: #a59c8c; }
   .dark #searchMsg, .dark .result small, .dark #credit { color: #736c61; }
@@ -313,6 +321,14 @@
     <div id="credit">Search by OpenStreetMap</div>
   </div>
 </div>
+<div id="unitDialog">
+  <div id="unitBox">
+    <div class="dialogTitle">Temperature units</div>
+    <button id="unitC" class="result unitOpt" type="button">Celsius (°C)<span class="check">&#10003;</span></button>
+    <button id="unitF" class="result unitOpt" type="button">Fahrenheit (°F)<span class="check">&#10003;</span></button>
+    <div class="unitActions"><button id="closeUnits" class="dialogBtn" type="button">Cancel</button></div>
+  </div>
+</div>
 
 <script>
 /* Plain ES5 on purpose: this has to run on Safari 12 (iOS 12.5.8). */
@@ -321,7 +337,7 @@
 
   /* ---------- Settings ---------- */
   var CONFIG = {
-    fahrenheit: false,    /* false = Celsius */
+    fahrenheit: false,    /* starting unit; tap the current temperature to change it */
     use24Hour: false,     /* true = 24-hour clock */
     darkFromHour: 21,     /* dark mode starts at 9 p.m. */
     reloadHour: 23,       /* picks up the latest version daily at 11 p.m. iPad time */
@@ -356,8 +372,7 @@
   var WEATHER_URL = 'https://api.open-meteo.com/v1/forecast' +
     '?current=temperature_2m,weather_code,is_day' +
     '&daily=weather_code,temperature_2m_max,temperature_2m_min' +
-    '&timezone=auto&forecast_days=5' +
-    (CONFIG.fahrenheit ? '&temperature_unit=fahrenheit' : '');
+    '&timezone=auto&forecast_days=5';
 
   /* source: 'device' (the iPad's own position), 'manual' (chosen by hand) or
      'ip' (estimated from the internet connection). */
@@ -366,7 +381,9 @@
   var nextDeviceCheck = 0;
   var deviceCheckPending = false;
   var locationDenied = false;
-  var dialogOpen = false;
+  var dialogOpen = false;  /* either dialog: location or units */
+  var UNIT_KEY = 'unit';
+  var useFahrenheit = CONFIG.fahrenheit;
   var dialogTouched = 0;
   var searchToken = 0;
   var weather = null;      /* { data, fetchedAt, lat, lon } */
@@ -453,8 +470,11 @@
 
   /* ---------- Weather display ---------- */
 
+  /* Weather always arrives in Celsius (the bar scale is in Celsius too), so the
+     unit only changes what is displayed. */
   function deg(value) {
-    return (typeof value === 'number') ? Math.round(value) + '°' : '--';
+    if (typeof value !== 'number') { return '--'; }
+    return Math.round(useFahrenheit ? value * 9 / 5 + 32 : value) + '°';
   }
 
   /* Positions a day's bar on the fixed scale. Temperatures beyond either end
@@ -717,8 +737,25 @@
     $('searchInput').focus();
   }
 
+  function openUnits() {
+    if (dialogOpen) { return; }
+    dialogOpen = true;
+    dialogTouched = Date.now();
+    $('unitC').className = 'result unitOpt' + (useFahrenheit ? '' : ' chosen');
+    $('unitF').className = 'result unitOpt' + (useFahrenheit ? ' chosen' : '');
+    $('unitDialog').className = 'open';
+  }
+
+  function setUnit(fahrenheit) {
+    useFahrenheit = fahrenheit;
+    save(UNIT_KEY, fahrenheit ? 'F' : 'C');
+    closeDialog();
+    renderWeather();
+  }
+
   function closeDialog() {
     dialogOpen = false;
+    $('unitDialog').className = '';
     searchToken++;
     $('searchInput').blur();
     $('dialog').className = '';
@@ -802,6 +839,8 @@
   }
 
   function loadSaved() {
+    var unit = load(UNIT_KEY);
+    if (unit === 'F' || unit === 'C') { useFahrenheit = unit === 'F'; }
     var savedPlace = load(PLACE_KEY);
     if (savedPlace && typeof savedPlace.lat === 'number' && typeof savedPlace.lon === 'number') {
       place = savedPlace;
@@ -944,6 +983,10 @@
      bring up a permission prompt. Tapping the place name lets you change it. */
   $('place').addEventListener('click', openDialog);
   $('closeDialog').addEventListener('click', closeDialog);
+  $('now').addEventListener('click', openUnits);
+  $('unitC').addEventListener('click', function () { setUnit(false); });
+  $('unitF').addEventListener('click', function () { setUnit(true); });
+  $('closeUnits').addEventListener('click', closeDialog);
   $('useDevice').addEventListener('click', function () {
     locationDenied = false;
     locateToken++;
