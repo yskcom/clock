@@ -885,6 +885,17 @@
 
   function renderClock(nowDate) {
     var shown = clockDate(nowDate);
+
+    /* Dark mode follows the time shown on screen, so it changes along with the
+       city. While a new city's time zone is still loading, it stays as it was. */
+    if (shown) {
+      var dark = isDarkTime(shown.getHours());
+      if (dark !== lastDark) {
+        lastDark = dark;
+        document.documentElement.className = dark ? 'dark' : '';
+      }
+    }
+
     var time = shown ? formatTime(shown) : '--:--';
     if (time !== lastTime) {
       lastTime = time;
@@ -915,12 +926,6 @@
   function tick() {
     var nowDate = new Date();
     var now = nowDate.getTime();
-
-    var dark = isDarkTime(nowDate.getHours());
-    if (dark !== lastDark) {
-      lastDark = dark;
-      document.documentElement.className = dark ? 'dark' : '';
-    }
 
     renderClock(nowDate);
 
